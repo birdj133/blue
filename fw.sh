@@ -21,10 +21,16 @@ show_menu() {
     "6" "Exit" 3>&1 1>&2 2>&3)
 
     case $CHOICE in
-        1) IPS=$(whiptail --inputbox "Enter IPs:" 10 60 3>&1 1>&2 2>&3)
-           echo "$IPS" | tr ',' '\n' | sed '/^$/d' >> "$IP_FILE"; show_menu ;;
-        2) PORTS=$(whiptail --inputbox "Enter Ports:" 10 60 3>&1 1>&2 2>&3)
-           echo "$PORTS" | tr ',' '\n' | sed '/^$/d' >> "$PORT_FILE"; show_menu ;;
+        1) 
+            IPS=$(whiptail --inputbox "Enter IPs (comma separated):" 10 60 3>&1 1>&2 2>&3)
+            if [ ! -z "$IPS" ]; then echo "$IPS" | tr ',' '\n' | sed '/^$/d' >> "$IP_FILE"; fi
+            show_menu 
+            ;;
+        2) 
+            PORTS=$(whiptail --inputbox "Enter Ports (comma separated):" 10 60 3>&1 1>&2 2>&3)
+            if [ ! -z "$PORTS" ]; then echo "$PORTS" | tr ',' '\n' | sed '/^$/d' >> "$PORT_FILE"; fi
+            show_menu 
+            ;;
         3) apply_rules "standard" ;;
         4) apply_rules "panic" ;;
         5) clear; iptables -L -n -v --line-numbers; echo -e "\nPress Enter..."; read; show_menu ;;
@@ -32,18 +38,26 @@ show_menu() {
     esac
 }
 
-# --- 3. THE FULL IPTABLES ENGINE ---
+# --- 3. THE ENGINE ---
 apply_rules() {
     MODE=$1
     
     # --- PHASE A: THE KICK (Panic Mode Only) ---
     if [ "$MODE" == "panic" ]; then
-        echo "FUCK YOU! Connection Terminated." | wall
+        # Send the "FUCK YOU" message to their terminal
+        echo "FUCK YOU! Connection Terminated." | wall 2>/dev/null
+        
+        # Flush kernel connection memory
         if command -v conntrack >/dev/null; then conntrack -F 2>/dev/null; fi
         
-        # KILL unauthorized SSH sessions
-        MY_PPID=$(ps -o ppid= -p $$ | tr -d ' ')
-        ps -ef | grep sshd | grep -v "grep" | grep -v "$MY_PPID" | awk '{print $2}' | xargs kill -9 2>/dev/null
+        # KILL unauthorized SSH sessions (The Physical Kick)
+        MY_TTY=$(tty | sed 's|/dev/||')
+        for pid in $(ps -ef | grep sshd | grep -v grep | awk '{print $2}'); do
+            # Check if this PID is tied to your TTY; if not, kill it
+            if ! ps -fp $pid | grep -q "$MY_TTY"; then
+                kill -9 $pid 2>/dev/null
+            fi
+        done
     fi
 
     # --- PHASE B: CLEAN SLATE ---
@@ -51,13 +65,10 @@ apply_rules() {
     iptables -X
     ip6tables -F 2>/dev/null
 
-    # --- PHASE C: YOUR CUSTOM DROPS (The "Always Remain" Rules) ---
-    # Attacker Subnets
+    # --- PHASE C: YOUR CUSTOM DROPS ---
     iptables -A INPUT -s 103.0.0.0/8 -j DROP
     iptables -A INPUT -s 43.0.0.0/8 -j DROP
-    
-    # Bogons / Multicast / Reserveds
-    iptables -A INPUT -s 224.0.0.0/4 -j DROP    # .mcast.net
+    iptables -A INPUT -s 224.0.0.0/4 -j DROP # .mcast.net
     iptables -A INPUT -d 224.0.0.0/4 -j DROP
     iptables -A INPUT -s 240.0.0.0/5 -j DROP
     iptables -A INPUT -d 240.0.0.0/5 -j DROP
@@ -69,26 +80,30 @@ apply_rules() {
     iptables -A FORWARD -m state --state INVALID -j DROP
     iptables -A OUTPUT -m state --state INVALID -j DROP
 
-    # --- PHASE D: WHITELIST (High Priority) ---
+    # --- PHASE D: WHITELIST ---
     iptables -A INPUT -i lo -j ACCEPT
-    while read ip; do
-        [ ! -z "$ip" ] && iptables -A INPUT -s "$ip" -j ACCEPT
-        [ ! -z "$ip" ] && iptables -A INPUT -d "$ip" -j ACCEPT
+    while read -r ip; do
+        if [ ! -z "$ip" ]; then
+            iptables -A INPUT -s "$ip" -j ACCEPT
+            iptables -A INPUT -d "$ip" -j ACCEPT
+        fi
     done < "$IP_FILE"
 
     # --- PHASE E: MODE-SPECIFIC LOGIC ---
     if [ "$MODE" == "panic" ]; then
-        # REJECT with TCP Reset (The "Fuck You" packet)
+        # REJECT with TCP Reset (Forces the other box to close the window)
         iptables -I INPUT 1 -p tcp -j REJECT --reject-with tcp-reset
         iptables -I INPUT 2 -j REJECT --reject-with icmp-admin-prohibited
     else
         # Allow Dynamic Ports
-        while read port; do
-            [ ! -z "$port" ] && iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
-            [ ! -z "$port" ] && iptables -A INPUT -p udp --dport "$port" -j ACCEPT
+        while read -r port; do
+            if [ ! -z "$port" ]; then
+                iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
+                iptables -A INPUT -p udp --dport "$port" -j ACCEPT
+            fi
         done < "$PORT_FILE"
 
-        # Honeyport 139 (Auto-Ban)
+        # Honeyport 139
         iptables -A INPUT -p tcp --dport 139 -m recent --name portscan --set -j DROP
         iptables -A INPUT -m recent --name portscan --rcheck --seconds 86400 -j DROP
 
@@ -99,7 +114,7 @@ apply_rules() {
         # ICMP Rate Limit
         iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 1/s -j ACCEPT
         
-        # Established session handling (ONLY in Standard Mode)
+        # Standard Established (Allows your current connection to stay)
         iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
     fi
 
@@ -109,9 +124,11 @@ apply_rules() {
     iptables -P OUTPUT ACCEPT
     ip6tables -P INPUT DROP 2>/dev/null
 
-    msg="Rules Applied."
-    [ "$MODE" == "panic" ] && msg="FUCK YOU Mode Active. Intruders Sniped."
+    msg="Rules Applied Successfully."
+    if [ "$MODE" == "panic" ]; then msg="FUCK YOU Mode Active. Intruders Sniped."; fi
     whiptail --msgbox "$msg" 10 50
+    show_menu
 }
 
+# --- 4. START ---
 show_menu
