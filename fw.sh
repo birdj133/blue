@@ -97,4 +97,21 @@ apply_rules() {
         iptables -A INPUT -p tcp -m recent --name sshattempt --rcheck --seconds 86400 -j DROP
         
         # ICMP Rate Limit
-        iptables -A INPUT -p icmp --icmp-type echo
+        iptables -A INPUT -p icmp --icmp-type echo-request -m limit --limit 1/s -j ACCEPT
+        
+        # Established session handling (ONLY in Standard Mode)
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    fi
+
+    # --- PHASE F: FINAL POLICIES ---
+    iptables -P INPUT DROP
+    iptables -P FORWARD DROP
+    iptables -P OUTPUT ACCEPT
+    ip6tables -P INPUT DROP 2>/dev/null
+
+    msg="Rules Applied."
+    [ "$MODE" == "panic" ] && msg="FUCK YOU Mode Active. Intruders Sniped."
+    whiptail --msgbox "$msg" 10 50
+}
+
+show_menu
