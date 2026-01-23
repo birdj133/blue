@@ -1,107 +1,97 @@
 #!/bin/bash
 # ==============================================================================
-# AEGIS-SOLO: STANDALONE DEFENDER (No Scoring IP Required)
+# AEGIS-OVERLORD: SOVEREIGN EDITION (The Absolute Final King)
 # ==============================================================================
 
-LOG_FILE="/tmp/.aegis_local.log"
-DASHBOARD="./aegis_dashboard.html"
-MY_IP=$(hostname -I | awk '{print $1}' | cut -d' ' -f1)
+# --- CONFIG & INTEL ---
+INTEL_DIR="/tmp/.aegis_intel" ; mkdir -p $INTEL_DIR
+LOG_MAIN="$INTEL_DIR/main.log"
+VAULT="/dev/shm/.vault" ; mkdir -p $VAULT
+DASHBOARD="./aegis_overlord.html"
+BINARIES=("/bin/ls" "/bin/ps" "/bin/netstat" "/usr/bin/whoami" "/bin/ss" "/usr/bin/top")
 
-# --- COLORS ---
-RED='\033[1;31m'
-GRN='\033[1;32m'
-YLW='\033[1;33m'
-BLU='\033[1;34m'
-NC='\033[0m'
-
-# Check for Root
-if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}Error: You must run this as sudo.${NC}"
-   exit 1
-fi
-
-# --- 1. NETWORK SHIELDING (General Hardening) ---
-apply_network_shield() {
-    echo -e "${BLU}[*] Applying General Anti-Flood Shielding...${NC}"
-    iptables -F
-    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-    
-    # Rate limit connections (Basic protection)
-    iptables -A INPUT -p tcp --syn --dport 22 -m connlimit --connlimit-above 5 -j REJECT
-    iptables -A INPUT -p tcp --syn -m limit --limit 20/s --limit-burst 30 -j ACCEPT
-    echo "[$(date +%T)] 🛡️ SHIELD: General DoS protection active." >> $LOG_FILE
-}
-
-# --- 2. THE GUARDIAN ENGINE ---
-guardian_engine() {
-    exec -a "[kworker/u2:1-evict]" bash << 'EOF' &
-    LOG_FILE="/tmp/.aegis_local.log"
-    DASHBOARD="./aegis_dashboard.html"
-    SERVICES=$(systemctl list-units --type=service --state=running | awk '{print $1}' | grep ".service")
-
-    while true; do
-        # A. C2 & SOCKET DETECTION
-        for pid_path in /proc/[0-9]*; do
-            pid=${pid_path##*/}
-            [ -e "$pid_path/fd/0" ] || continue
-            fd0=$(readlink "$pid_path/fd/0" 2>/dev/null)
-            
-            if [[ "$fd0" == socket:* ]]; then
-                inode=${fd0#socket:[}; inode=${inode%]}
-                rem_ip=$(grep "$inode" /proc/net/tcp 2>/dev/null | awk '{print $3}' | cut -d: -f1)
-                
-                # If remote IP is detected and not local (00000000)
-                if [[ ! -z "$rem_ip" && "$rem_ip" != "00000000" ]]; then
-                    proc_name=$(cat "$pid_path/comm" 2>/dev/null)
-                    # Honey-Talk
-                    echo -e "\nCRITICAL: IO Error. Connection Reset.\n" > "/proc/$pid/fd/1" 2>/dev/null
-                    kill -9 "$pid"
-                    echo "[$(date +%T)] 💀 KILLED C2: $proc_name (PID $pid)" >> $LOG_FILE
-                fi
-            fi
-        done
-
-        # B. SERVICE HEALING
-        for srv in $SERVICES; do
-            if [[ $(systemctl is-active "$srv") != "active" ]]; then
-                systemctl start "$srv"
-                echo "[$(date +%T)] 🛠️ HEALED: $srv restarted." >> $LOG_FILE
-            fi
-        done
-
-        # C. DASHBOARD GENERATION
-        cat <<EOD > $DASHBOARD
-<html><head><meta http-equiv="refresh" content="1"><style>
-    body { background: #0d1117; color: #c9d1d9; font-family: 'Courier New', monospace; padding: 25px; }
-    .card { background: #161b22; border-left: 5px solid #30363d; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
-    .c2 { border-left-color: #f7768e; background: #211a1d; }
-    .heal { border-left-color: #79c0ff; }
-</style></head><body>
-    <h2 style="color:#58a6ff">🛡️ AEGIS SOLO: DASHBOARD</h2>
-    $(tail -n 20 $LOG_FILE | tac | sed 's/💀\(.*\)/<div class="card c2"><b>[ALERT]<\/b> \1<\/div>/' | sed 's/🛠️\(.*\)/<div class="card heal"><b>[RECOVERED]<\/b> \1<\/div>/')
-</body></html>
-EOD
-        sleep 2
-    done
-EOF
-}
-
-# --- 3. WATCHDOG ---
-spawn_watchdog() {
-    while true; do
-        if ! pgrep -f "[kworker/u2:1-evict]" > /dev/null; then
-            guardian_engine
+# --- 1. THE VAULT (Binary Integrity) ---
+shield_binaries() {
+    for bin in "${BINARIES[@]}"; do
+        if [ -f "$bin" ]; then
+            sha256sum "$bin" > "$VAULT/$(basename "$bin").hash"
+            cp "$bin" "$VAULT/$(basename "$bin").clean"
         fi
-        sleep 2
     done
+}
+
+enforce_integrity() {
+    for bin in "${BINARIES[@]}"; do
+        [ ! -f "$bin" ] && cp "$VAULT/$(basename "$bin").clean" "$bin"
+        curr_h=$(sha256sum "$bin"); clean_h=$(cat "$VAULT/$(basename "$bin").hash" 2>/dev/null)
+        if [ "$curr_h" != "$clean_h" ]; then
+            cp "$VAULT/$(basename "$bin").clean" "$bin" ; chmod +x "$bin"
+            echo "[$(date +%T)] 🚨 BINARY REVERTED: $bin" >> $LOG_MAIN
+        fi
+    done
+}
+
+# --- 2. THE SENTINEL (Detection & Mitigation) ---
+monitor_system() {
+    # Fileless Malware (memfd)
+    find /proc/*/exe -ls 2>/dev/null | grep -E "memfd|\(deleted\)" | while read -r line; do
+        bad_pid=$(echo "$line" | awk '{print $11}' | cut -d/ -f3)
+        echo "[$(date +%T)] ☣️ MALWARE KILLED: PID $bad_pid" >> $LOG_MAIN
+        kill -9 "$bad_pid" 2>/dev/null
+    done
+
+    # Hidden Process Detection
+    ps_pids=$(/dev/shm/.vault/ps.clean -eo pid --no-headers)
+    for p_dir in /proc/[0-9]*; do
+        pid=${p_dir##*/}
+        if ! echo "$ps_pids" | grep -q -w "$pid"; then
+            echo "[$(date +%T)] 💀 GHOST KILLED: $(cat $p_dir/comm) ($pid)" >> $LOG_MAIN
+            kill -9 "$pid" 2>/dev/null
+        fi
+    done
+}
+
+# --- 3. THE TUI (Interactive Dashboard) ---
+run_tui() {
+    while true; do
+        clear
+        echo -e "\033[1;36m👑 AEGIS OVERLORD: SOVEREIGN\033[0m"
+        echo -e "----------------------------------------------------"
+        echo -e " [L] NET LOCKDOWN  [P] PURGE PERSIST  [I] IMMUTABLE ON"
+        echo -e " [S] SUID GUARD    [B] RE-SCAN BINS   [Q] EXIT"
+        echo -e "----------------------------------------------------"
+        echo -e "\033[1;33mDETECTION FEED (Arrows to scroll in 2nd tab):\033[0m"
+        tail -n 12 $LOG_MAIN | tac
+        echo -ne "\n\033[1;32mCommand > \033[0m"
+        read -n 1 -t 3 key
+        case "$key" in
+            l|L) iptables -P INPUT DROP; iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT ;;
+            p|P) find /home -name "authorized_keys" -exec truncate -s 0 {} \; ; echo "" > /etc/crontab ;;
+            i|I) chattr +i /etc/passwd /etc/shadow /etc/sudoers 2>/dev/null ;;
+            s|S) find / -perm -4000 -type f -exec chmod 000 {} \; 2>/dev/null ;;
+            b|B) shield_binaries ;;
+            q|Q) pkill -P $$; exit ;;
+        esac
+    done
+}
+
+# --- 4. THE GUI (Web Quadrant) ---
+generate_gui() {
+    cat <<EOF > $DASHBOARD
+    <html><head><meta http-equiv="refresh" content="2"><style>
+    body { background: #0d1117; color: #c9d1d9; font-family: monospace; padding: 20px; }
+    .box { background: #161b22; border: 1px solid #30363d; padding: 10px; margin-bottom: 10px; border-left: 4px solid #58a6ff; }
+    .alert { border-left-color: #ff7b72; background: #211a1d; }
+    </style></head><body>
+    <h1>🛡️ AEGIS SOVEREIGN GUI</h1>
+    $(tail -n 30 $LOG_MAIN | tac | sed 's/🚨\(.*\)/<div class="box alert"><b>[TAMPER]<\/b>\1<\/div>/' | sed 's/☣️\(.*\)/<div class="box alert"><b>[MALWARE]<\/b>\1<\/div>/' | sed 's/\[\(.*\)\]\(.*\)/<div class="box"><b>[\1]<\/b>\2<\/div>/')
+</body></html>
+EOF
+    chmod 666 $DASHBOARD
 }
 
 # --- EXECUTION ---
-clear
-echo -e "${GRN}[+] Aegis Solo Standalone Starting...${NC}"
-touch $LOG_FILE
-apply_network_shield
-guardian_engine
-spawn_watchdog &
-echo -e "${GRN}[+] Dashboard: file://$(realpath $DASHBOARD)${NC}"
-tail -f $LOG_FILE
+if [[ $EUID -ne 0 ]]; then echo "Run as root!"; exit 1; fi
+shield_binaries
+(while true; do enforce_integrity; monitor_system; generate_gui; sleep 3; done) &
+run_tui
