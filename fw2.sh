@@ -68,7 +68,7 @@ apply_rules() {
     # 1. Whitelists (i and o)
     for ip in $WHITELIST_IPS; do
         iptables -A INPUT -s $ip -j ACCEPT
-        iptables -A INPUT -d $ip -j ACCEPT
+        iptables -A OUTPUT -d $ip -j ACCEPT
     done
 
     # 2. Bogon Drops (i)
