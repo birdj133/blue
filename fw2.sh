@@ -19,7 +19,7 @@ show_menu() {
     CHOICE=$(whiptail --title "ULTIMATE FIREWALL: FULL SUITE" --menu "Navigate with Arrows" 20 75 8 \
     "1" "View Live / Saved Rules" \
     "2" "Add Accepted IPs (Safe List)" \
-    "3" "Add Allowed Ports" \
+    "3" "Add Allowed Ports (Format: 80/tcp, 53/udp)" \
     "4" "APPLY ALL SECURITY RULES" \
     "5" "FIRST TIME? (Panic: Absolute Kick)" \
     "6" "Clear All Lists (Reset IPs/Ports)" \
@@ -39,14 +39,14 @@ show_menu() {
             if [ ! -z "$IPS" ]; then echo "$IPS" | tr ',' '\n' | sed '/^$/d' >> "$IP_FILE"; fi
             show_menu ;;
         3) 
-            PORTS=$(whiptail --inputbox "Enter Ports (comma separated):" 10 60 3>&1 1>&2 2>&3)
+            PORTS=$(whiptail --inputbox "Enter Ports (e.g., 22, 53/udp, 80/tcp):" 10 60 3>&1 1>&2 2>&3)
             if [ ! -z "$PORTS" ]; then echo "$PORTS" | tr ',' '\n' | sed '/^$/d' >> "$PORT_FILE"; fi
             show_menu ;;
         4) apply_rules "standard" ;;
         5) apply_rules "panic" ;;
         6) 
             > "$IP_FILE"; > "$PORT_FILE"
-            whiptail --msgbox "IP and Port lists have been cleared." 10 50
+            whiptail --msgbox "Lists cleared." 10 50
             show_menu ;;
         *) exit ;;
     esac
@@ -59,8 +59,6 @@ apply_rules() {
     # --- PHASE A: CLEAN SLATE ---
     iptables -F
     iptables -X
-    iptables -t nat -F 2>/dev/null
-    iptables -t mangle -F 2>/dev/null
     ip6tables -F 2>/dev/null
     ip6tables -X 2>/dev/null
 
@@ -73,7 +71,7 @@ apply_rules() {
         fi
     done < "$IP_FILE"
 
-    # --- PHASE C: SPECIFIC DROPS ---
+    # --- PHASE C: DROPS (EXACTLY AS PER IMAGE) ---
     iptables -A INPUT -s 224.0.0.0/4 -j DROP
     iptables -A INPUT -d 224.0.0.0/4 -j DROP
     iptables -A INPUT -s 240.0.0.0/5 -j DROP
@@ -85,33 +83,40 @@ apply_rules() {
     iptables -A INPUT -s 255.255.255.255 -j DROP
     iptables -A INPUT -d 255.255.255.255 -j DROP
 
-    # --- PHASE D: LOGGING & ATTACK PREVENTION ---
+    # --- PHASE D: LOGGING & PROTECTION ---
     iptables -A INPUT -p icmp --icmp-type echo-request -j LOG --log-prefix "ICMP Attempt: " --log-level 4
     
+    # Honeyport 139
     iptables -A FORWARD -p tcp --dport 139 -m recent --name portscan --set -j LOG --log-prefix "portscan:" --log-level 4
     iptables -A FORWARD -p tcp --dport 139 -m recent --name portscan --set -j DROP
     iptables -A INPUT -m recent --name portscan --rcheck --seconds 86400 -j DROP
     iptables -A INPUT -m recent --name portscan --remove
 
+    # TCP Reset rate limiting
     iptables -A INPUT -p tcp --tcp-flags RST RST -m limit --limit 2/second --limit-burst 2 -j ACCEPT
 
+    # SSH Attempt Tracking
     iptables -A INPUT -p tcp --dport 22 -m recent --name sshattempt --set -j LOG --log-prefix "SSH ATTEMPT: " --log-level 4
     iptables -A INPUT -m recent --name sshattempt --rcheck --seconds 86400 -j DROP
 
-    # --- PHASE E: DYNAMIC PORTS & ESTABLISHED ---
+    # --- PHASE E: DYNAMIC PORTS (SMART PROTOCOL HANDLING) ---
     if [ "$MODE" != "panic" ]; then
-        while read -r port; do
-            if [ ! -z "$port" ]; then
-                iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
-                iptables -A INPUT -p udp --dport "$port" -j ACCEPT
+        while read -r entry; do
+            if [[ "$entry" == *"/"* ]]; then
+                # User specified protocol (e.g., 53/udp)
+                port=$(echo "$entry" | cut -d'/' -f1)
+                proto=$(echo "$entry" | cut -d'/' -f2)
+                iptables -A INPUT -p "$proto" --dport "$port" -j ACCEPT
+            else
+                # Default to TCP only for cleanliness
+                iptables -A INPUT -p tcp --dport "$entry" -j ACCEPT
             fi
         done < "$PORT_FILE"
         
-        # Standard established traffic
         iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
     fi
 
-    # --- PHASE F: INVALID PACKET LOGGING ---
+    # --- PHASE F: INVALID PACKET LOGS ---
     iptables -A FORWARD -m state --state INVALID -j LOG --log-prefix "Forward Invalid Drop: " --log-level 4
     iptables -A FORWARD -m state --state INVALID -j DROP
     iptables -A OUTPUT -m state --state INVALID -j LOG --log-prefix "OUTPUT Invalid Drop: " --log-level 4
@@ -120,7 +125,7 @@ apply_rules() {
     iptables -A FORWARD -m recent --name portscan --rcheck --seconds 86400 -j DROP
     iptables -A FORWARD -m recent --name portscan --remove
 
-    # --- PHASE G: FINAL POLICIES & PANIC ---
+    # --- PHASE G: FINAL POLICIES ---
     if [ "$MODE" == "panic" ]; then
         echo "FIRST TIME? Connection Terminated." | wall 2>/dev/null
         iptables -I INPUT 1 -p tcp -j REJECT --reject-with tcp-reset
@@ -132,20 +137,20 @@ apply_rules() {
     fi
 
     iptables -A INPUT -j REJECT
+    ip6tables -A INPUT -j DROP
+    iptables -A OUTPUT -j ACCEPT
+    iptables -A FORWARD -j REJECT
+    
     iptables -P INPUT DROP
     iptables -P FORWARD DROP
     iptables -P OUTPUT ACCEPT
-    
-    ip6tables -A INPUT -j DROP
     ip6tables -P INPUT DROP
 
     # --- PHASE H: PERSISTENCE ---
     iptables-save > "$RULES_V4"
     ip6tables-save > "$RULES_V6"
 
-    msg="Rules Applied Successfully."
-    if [ "$MODE" == "panic" ]; then msg="FIRST TIME? Mode Active. Unauthorized sessions purged."; fi
-    whiptail --msgbox "$msg" 10 50
+    whiptail --msgbox "Rules updated." 10 50
     show_menu
 }
 
