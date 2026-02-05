@@ -19,9 +19,6 @@ for ip in "${ADDR[@]}"; do
     sudo iptables -A INPUT -d $ip -j ACCEPT
 done
 
-# ICMP Allowance for Scoring Engine (uses first IP in whitelist as a placeholder or specific engine)
-sudo iptables -A INPUT -p icmp --icmp-type 8 -j ACCEPT
-
 # --- 4. Bogon/Multicast Filtering ---
 sudo iptables -A INPUT -s 224.0.0.0/4 -j DROP
 sudo iptables -A INPUT -d 224.0.0.0/4 -j DROP
