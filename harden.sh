@@ -73,5 +73,5 @@ sudo iptables -A FORWARD -j REJECT
 sudo iptables -A OUTPUT -j ACCEPT
 sudo ip6tables -A INPUT -j DROP
 
-sudo iptables-save
-sudo ip6tables-save
+sudo iptables-save | sudo tee /etc/iptables/rules.v4
+sudo ip6tables-save | sudo tee /etc/iptables/rules.v6
