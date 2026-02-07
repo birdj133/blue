@@ -16,7 +16,7 @@ show_menu() {
     "1" "Add Accepted IPs (Safe List)" \
     "2" "Add Allowed Ports" \
     "3" "APPLY ALL SECURITY RULES" \
-    "4" "FUCK YOU (Panic: Absolute Kick)" \
+    "4" "NOT COOL (Panic: Absolute Kick)" \
     "5" "View Live Rules (-L)" \
     "6" "Exit" 3>&1 1>&2 2>&3)
 
@@ -45,7 +45,7 @@ apply_rules() {
     # --- PHASE A: THE KICK (Panic Mode Only) ---
     if [ "$MODE" == "panic" ]; then
         # Send the "FUCK YOU" message to their terminal
-        echo "FUCK YOU! Connection Terminated." | wall 2>/dev/null
+        echo "NOT COOL! Connection Terminated." | wall 2>/dev/null
         
         # Flush kernel connection memory
         if command -v conntrack >/dev/null; then conntrack -F 2>/dev/null; fi
